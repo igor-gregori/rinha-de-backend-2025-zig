@@ -13,17 +13,23 @@ const protocol = @import("storage_protocol.zig");
 const StorageClient = @import("storage_client.zig").StorageClient;
 
 pub fn main() !void {
+    print("=== STARTING RINHA BACKEND ===\n", .{});
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    print("Allocator initialized\n", .{});
 
     const storage_mode = std.process.getEnvVarOwned(allocator, "STORAGE_MODE") catch null;
     defer if (storage_mode) |mode| allocator.free(mode);
 
-    if (storage_mode != null) {
+    if (storage_mode) |mode| {
+        print("Storage mode detected: {s}\n", .{mode});
         return runStorageService(allocator);
+    } else {
+        print("Gateway mode detected (no STORAGE_MODE)\n", .{});
     }
 
+    print("Gateway mode starting...\n", .{});
     const trigger_ms = 200;
     const slave_count = 2;
 
@@ -32,12 +38,16 @@ pub fn main() !void {
     var queue = PaymentQueue.init(allocator);
     defer queue.deinit();
 
+    print("Creating storage client...\n", .{});
     var storage_client = StorageClient.init(allocator, "/sockets/storage.sock");
+    print("Storage client created\n", .{});
 
     var worker_system = SmartWorkerSystem.init(allocator, &queue, &client, &storage_client, &shared_state, trigger_ms, slave_count);
     defer worker_system.deinit();
 
+    print("Starting worker system...\n", .{});
     try worker_system.start();
+    print("Worker system started successfully\n", .{});
     defer worker_system.stop();
 
     const socket_path = std.process.getEnvVarOwned(allocator, "SOCKET_PATH") catch "/tmp/gateway.sock";
@@ -124,6 +134,7 @@ fn handleSummary(allocator: std.mem.Allocator, storage_client: *StorageClient, s
         print("Error getting summary: {}\n", .{err});
         return;
     };
+
     const json_body = json_parser.createPaymentSummaryJson(summary, allocator) catch return;
     defer allocator.free(json_body);
 
