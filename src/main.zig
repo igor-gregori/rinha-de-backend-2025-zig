@@ -9,6 +9,8 @@ const HttpClient = @import("http_client.zig").HttpClient;
 const PaymentQueue = @import("payment_queue.zig").PaymentQueue;
 const SmartWorkerSystem = @import("smart_worker.zig").SmartWorkerSystem;
 const SharedProcessorState = @import("shared_state.zig").SharedProcessorState;
+const protocol = @import("storage_protocol.zig");
+const StorageClient = @import("storage_client.zig").StorageClient;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -22,9 +24,6 @@ pub fn main() !void {
         return runStorageService(allocator);
     }
 
-    var store = storage.Storage.init(allocator);
-    defer store.deinit();
-
     const trigger_ms = 200;
     const slave_count = 2;
 
@@ -33,7 +32,9 @@ pub fn main() !void {
     var queue = PaymentQueue.init(allocator);
     defer queue.deinit();
 
-    var worker_system = SmartWorkerSystem.init(allocator, &queue, &client, &store, &shared_state, trigger_ms, slave_count);
+    var storage_client = StorageClient.init(allocator, "/sockets/storage.sock");
+
+    var worker_system = SmartWorkerSystem.init(allocator, &queue, &client, &storage_client, &shared_state, trigger_ms, slave_count);
     defer worker_system.deinit();
 
     try worker_system.start();
@@ -55,6 +56,11 @@ pub fn main() !void {
     };
     defer server.deinit();
 
+    const result = std.c.chmod(@ptrCast(socket_path), 0o777);
+    if (result != 0) {
+        print("Warning: Failed to set socket permissions: {}\n", .{result});
+    }
+
     print("Server listening on {s}\n", .{socket_path});
 
     while (true) {
@@ -63,14 +69,14 @@ pub fn main() !void {
             continue;
         };
 
-        handleConnection(allocator, &store, &queue, connection) catch |err| {
+        handleConnection(allocator, &storage_client, &queue, connection) catch |err| {
             print("Error handling connection: {}\n", .{err});
         };
         connection.stream.close();
     }
 }
 
-fn handleConnection(allocator: std.mem.Allocator, store: *storage.Storage, queue: *PaymentQueue, connection: net.Server.Connection) !void {
+fn handleConnection(allocator: std.mem.Allocator, storage_client: *StorageClient, queue: *PaymentQueue, connection: net.Server.Connection) !void {
     var buffer: [4096]u8 = undefined;
     const bytes_read = try connection.stream.read(&buffer);
 
@@ -81,7 +87,7 @@ fn handleConnection(allocator: std.mem.Allocator, store: *storage.Storage, queue
     if (std.mem.startsWith(u8, request, "POST /payments")) {
         try handlePayment(allocator, queue, connection.stream, request);
     } else if (std.mem.startsWith(u8, request, "GET /payments-summary")) {
-        try handleSummary(allocator, store, connection.stream, request);
+        try handleSummary(allocator, storage_client, connection.stream, request);
     } else {
         try send404(connection.stream);
     }
@@ -102,16 +108,22 @@ fn handlePayment(allocator: std.mem.Allocator, queue: *PaymentQueue, stream: net
     }
 }
 
-fn handleSummary(allocator: std.mem.Allocator, store: *storage.Storage, stream: net.Stream, request: []const u8) !void {
+fn handleSummary(allocator: std.mem.Allocator, storage_client: *StorageClient, stream: net.Stream, request: []const u8) !void {
     var query = types.SummaryQuery{};
 
     if (std.mem.indexOf(u8, request, "?")) |query_start| {
         const query_end = std.mem.indexOf(u8, request[query_start..], " ") orelse request.len - query_start;
         const query_string = request[query_start + 1 .. query_start + query_end];
-        query = http_utils.parseQueryParams(query_string, allocator) catch types.SummaryQuery{};
+        query = http_utils.parseQueryParams(query_string, allocator) catch |err| {
+            print("Error parsing query params: {}\n", .{err});
+            return;
+        };
     }
 
-    const summary = store.getSummary(query);
+    const summary = storage_client.getSummary(query) catch |err| {
+        print("Error getting summary: {}\n", .{err});
+        return;
+    };
     const json_body = json_parser.createPaymentSummaryJson(summary, allocator) catch return;
     defer allocator.free(json_body);
 
@@ -148,6 +160,11 @@ fn runStorageService(allocator: std.mem.Allocator) !void {
     };
     defer server.deinit();
 
+    const result = std.c.chmod(@ptrCast(socket_path), 0o777);
+    if (result != 0) {
+        print("Warning: Failed to set storage socket permissions: {}\n", .{result});
+    }
+
     print("Storage Service listening on {s}\n", .{socket_path});
 
     while (true) {
@@ -164,9 +181,36 @@ fn runStorageService(allocator: std.mem.Allocator) !void {
 }
 
 fn handleStorageConnection(allocator: std.mem.Allocator, store: *storage.Storage, connection: net.Server.Connection) !void {
-    _ = allocator;
-    _ = store;
-    _ = connection;
+    const reader = connection.stream.reader();
+    const writer = connection.stream.writer();
 
-    print("Storage connection handled\n", .{});
+    const command = protocol.readCommand(reader) catch return;
+
+    switch (command) {
+        .add_payment => {
+            const request = protocol.readAddPaymentRequest(reader, allocator) catch return;
+            defer allocator.free(request.correlation_id);
+
+            store.addPayment(request.correlation_id, request.amount, request.processor) catch {};
+
+            try writer.writeByte(1);
+        },
+        .get_summary => {
+            const request = protocol.readGetSummaryRequest(reader, allocator) catch return;
+            defer if (request.from) |from| allocator.free(from);
+            defer if (request.to) |to| allocator.free(to);
+
+            const query = types.SummaryQuery{
+                .from = request.from,
+                .to = request.to,
+            };
+
+            const summary = store.getSummary(query);
+            try protocol.writePaymentSummary(writer, summary);
+        },
+        .purge_payments => {
+            store.reset();
+            try writer.writeByte(1);
+        },
+    }
 }

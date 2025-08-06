@@ -2,13 +2,13 @@ const std = @import("std");
 const types = @import("types.zig");
 const PaymentQueue = @import("payment_queue.zig").PaymentQueue;
 const HttpClient = @import("http_client.zig").HttpClient;
-const Storage = @import("storage.zig").Storage;
+const StorageClient = @import("storage_client.zig").StorageClient;
 const SharedProcessorState = @import("shared_state.zig").SharedProcessorState;
 
 pub const SmartWorkerSystem = struct {
     queue: *PaymentQueue,
     client: *HttpClient,
-    storage: *Storage,
+    storage_client: *StorageClient,
     shared_state: *SharedProcessorState,
     trigger_ms: u32,
     running: std.atomic.Value(bool),
@@ -17,11 +17,11 @@ pub const SmartWorkerSystem = struct {
     slave_notify: std.Thread.ResetEvent,
     slave_count: usize,
 
-    pub fn init(allocator: std.mem.Allocator, queue: *PaymentQueue, client: *HttpClient, storage: *Storage, shared_state: *SharedProcessorState, trigger_ms: u32, slave_count: usize) SmartWorkerSystem {
+    pub fn init(allocator: std.mem.Allocator, queue: *PaymentQueue, client: *HttpClient, storage_client: *StorageClient, shared_state: *SharedProcessorState, trigger_ms: u32, slave_count: usize) SmartWorkerSystem {
         return SmartWorkerSystem{
             .queue = queue,
             .client = client,
-            .storage = storage,
+            .storage_client = storage_client,
             .shared_state = shared_state,
             .trigger_ms = trigger_ms,
             .running = std.atomic.Value(bool).init(false),
@@ -77,7 +77,7 @@ pub const SmartWorkerSystem = struct {
                 const duration_ns = std.time.nanoTimestamp() - start_time;
                 const duration_ms = @as(u32, @intCast(@divTrunc(duration_ns, 1_000_000)));
 
-                self.storage.addPayment(payment.correlation_id, payment.amount, processor_type) catch {};
+                self.storage_client.addPayment(payment.correlation_id, payment.amount, processor_type) catch {};
 
                 if (duration_ms <= self.trigger_ms) {
                     self.slave_notify.set();
@@ -94,7 +94,7 @@ pub const SmartWorkerSystem = struct {
                             const next_duration_ns = std.time.nanoTimestamp() - next_start;
                             const next_duration_ms = @as(u32, @intCast(@divTrunc(next_duration_ns, 1_000_000)));
 
-                            self.storage.addPayment(next_payment.correlation_id, next_payment.amount, next_processor) catch {};
+                            self.storage_client.addPayment(next_payment.correlation_id, next_payment.amount, next_processor) catch {};
 
                             self.queue.allocator.free(next_payment.correlation_id);
 
@@ -126,7 +126,7 @@ pub const SmartWorkerSystem = struct {
                         break;
                     };
 
-                    self.storage.addPayment(payment.correlation_id, payment.amount, processor_type) catch {};
+                    self.storage_client.addPayment(payment.correlation_id, payment.amount, processor_type) catch {};
 
                     self.queue.allocator.free(payment.correlation_id);
 
