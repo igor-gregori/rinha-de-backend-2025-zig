@@ -5,6 +5,9 @@ const types = @import("types.zig");
 const json_parser = @import("json_parser.zig");
 const storage = @import("storage.zig");
 const http_utils = @import("http_utils.zig");
+const HttpClient = @import("http_client.zig").HttpClient;
+const PaymentQueue = @import("payment_queue.zig").PaymentQueue;
+const PaymentWorker = @import("payment_worker.zig").PaymentWorker;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -13,6 +16,14 @@ pub fn main() !void {
 
     var store = storage.Storage.init(allocator);
     defer store.deinit();
+
+    var client = HttpClient.init(allocator);
+    var queue = PaymentQueue.init(allocator);
+    defer queue.deinit();
+
+    var worker = PaymentWorker.init(&queue, &client, &store);
+    try worker.start();
+    defer worker.stop();
 
     const socket_path = "/tmp/gateway.sock";
 
@@ -37,14 +48,14 @@ pub fn main() !void {
             continue;
         };
 
-        handleConnection(allocator, &store, connection) catch |err| {
+        handleConnection(allocator, &store, &queue, connection) catch |err| {
             print("Error handling connection: {}\n", .{err});
         };
         connection.stream.close();
     }
 }
 
-fn handleConnection(allocator: std.mem.Allocator, store: *storage.Storage, connection: net.Server.Connection) !void {
+fn handleConnection(allocator: std.mem.Allocator, store: *storage.Storage, queue: *PaymentQueue, connection: net.Server.Connection) !void {
     var buffer: [4096]u8 = undefined;
     const bytes_read = try connection.stream.read(&buffer);
 
@@ -53,7 +64,7 @@ fn handleConnection(allocator: std.mem.Allocator, store: *storage.Storage, conne
     const request = buffer[0..bytes_read];
 
     if (std.mem.startsWith(u8, request, "POST /payments")) {
-        try handlePayment(allocator, store, connection.stream, request);
+        try handlePayment(allocator, queue, connection.stream, request);
     } else if (std.mem.startsWith(u8, request, "GET /payments-summary")) {
         try handleSummary(allocator, store, connection.stream, request);
     } else {
@@ -61,19 +72,19 @@ fn handleConnection(allocator: std.mem.Allocator, store: *storage.Storage, conne
     }
 }
 
-fn handlePayment(allocator: std.mem.Allocator, store: *storage.Storage, stream: net.Stream, request: []const u8) !void {
+fn handlePayment(allocator: std.mem.Allocator, queue: *PaymentQueue, stream: net.Stream, request: []const u8) !void {
     _ = allocator;
+
+    const response = "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n";
+    _ = try stream.writeAll(response);
 
     const body_start = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
     const body = request[body_start + 4 ..];
 
     if (body.len > 0) {
         const payment = json_parser.parsePaymentRequestInPlace(body) catch return;
-        store.addPayment(payment.correlation_id, payment.amount, .default) catch return;
+        queue.push(payment) catch return;
     }
-
-    const response = "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n";
-    _ = try stream.writeAll(response);
 }
 
 fn handleSummary(allocator: std.mem.Allocator, store: *storage.Storage, stream: net.Stream, request: []const u8) !void {
