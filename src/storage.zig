@@ -48,10 +48,14 @@ pub const Storage = struct {
 
         for (self.payments.items) |payment| {
             if (from_timestamp) |from| {
-                if (payment.timestamp < from) continue;
+                if (payment.timestamp < from) {
+                    continue;
+                }
             }
             if (to_timestamp) |to| {
-                if (payment.timestamp > to) continue;
+                if (payment.timestamp > to) {
+                    continue;
+                }
             }
 
             switch (payment.processor) {

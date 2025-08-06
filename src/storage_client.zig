@@ -49,7 +49,10 @@ pub const StorageClient = struct {
             .to = query.to,
         };
 
-        try protocol.writeGetSummaryRequest(writer, request);
+        protocol.writeGetSummaryRequest(writer, request) catch |err| {
+            std.debug.print("Error writing get summary request: {}\n", .{err});
+            return error.ConnectionFailed;
+        };
 
         return try protocol.readPaymentSummary(reader);
     }

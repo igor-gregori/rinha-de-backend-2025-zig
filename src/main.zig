@@ -217,6 +217,7 @@ fn handleStorageConnection(allocator: std.mem.Allocator, store: *storage.Storage
             };
 
             const summary = store.getSummary(query);
+
             try protocol.writePaymentSummary(writer, summary);
         },
         .purge_payments => {
