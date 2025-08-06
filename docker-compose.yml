@@ -1,0 +1,83 @@
+services:
+  haproxy:
+    image: haproxy:3.2.3-alpine
+    container_name: rinha-haproxy
+    ports:
+      - 9999:80
+    volumes:
+      - sockets:/sockets:rw
+      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - backend
+    depends_on:
+      - rinha-gateway-1
+      - rinha-gateway-2
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: "50MB"
+
+  rinha-gateway-1:
+    build: .
+    container_name: rinha-gateway-1
+    environment:
+      - GATEWAY_ID=1
+      - SOCKET_PATH=/sockets/gateway.sock.1
+    volumes:
+      - sockets:/sockets:rw
+    networks:
+      - backend
+      - payment-processor
+    depends_on:
+      - rinha-storage
+    deploy:
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: "100MB"
+
+  rinha-gateway-2:
+    build: .
+    container_name: rinha-gateway-2
+    environment:
+      - GATEWAY_ID=2
+      - SOCKET_PATH=/sockets/gateway.sock.2
+    volumes:
+      - sockets:/sockets:rw
+    networks:
+      - backend
+      - payment-processor
+    depends_on:
+      - rinha-storage
+    deploy:
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: "100MB"
+
+  rinha-storage:
+    build: .
+    container_name: rinha-storage
+    environment:
+      - STORAGE_MODE=true
+      - SOCKET_PATH=/sockets/storage.sock
+    volumes:
+      - sockets:/sockets:rw
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: "100MB"
+
+volumes:
+  sockets:
+
+networks:
+  backend:
+    name: rinha-net
+    driver: bridge
+  payment-processor:
+    external: true
