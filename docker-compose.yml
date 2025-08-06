@@ -2,11 +2,14 @@ services:
   haproxy:
     image: haproxy:3.2.3-alpine
     container_name: rinha-haproxy
+    user: root
     ports:
       - 9999:80
     volumes:
       - sockets:/sockets:rw
       - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./config/haproxy-entrypoint.sh:/haproxy-entrypoint.sh:ro
+    command: ["/haproxy-entrypoint.sh"]
     networks:
       - backend
     depends_on:
@@ -21,6 +24,7 @@ services:
   rinha-gateway-1:
     build: .
     container_name: rinha-gateway-1
+
     environment:
       - GATEWAY_ID=1
       - SOCKET_PATH=/sockets/gateway.sock.1
@@ -40,6 +44,7 @@ services:
   rinha-gateway-2:
     build: .
     container_name: rinha-gateway-2
+
     environment:
       - GATEWAY_ID=2
       - SOCKET_PATH=/sockets/gateway.sock.2
@@ -59,6 +64,7 @@ services:
   rinha-storage:
     build: .
     container_name: rinha-storage
+
     environment:
       - STORAGE_MODE=true
       - SOCKET_PATH=/sockets/storage.sock
