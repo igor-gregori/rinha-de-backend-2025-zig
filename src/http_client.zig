@@ -36,7 +36,18 @@ pub const HttpClient = struct {
     }
 
     fn sendToProcessor(self: *HttpClient, payment: types.PaymentRequest, host: []const u8, port: u16) bool {
-        const address = net.Address.resolveIp(host, port) catch return false;
+        var resolved_addresses = net.getAddressList(self.allocator, host, port) catch |err| {
+            std.debug.print("Error resolving address: {}\n", .{err});
+            return false;
+        };
+        defer resolved_addresses.deinit();
+
+        if (resolved_addresses.addrs.len == 0) {
+            std.debug.print("No addresses resolved for {s}\n", .{host});
+            return false;
+        }
+
+        const address = resolved_addresses.addrs[0];
         const stream = net.tcpConnectToAddress(address) catch return false;
         defer stream.close();
 
