@@ -24,7 +24,6 @@ services:
   rinha-gateway-1:
     build: .
     container_name: rinha-gateway-1
-
     environment:
       - GATEWAY_ID=1
       - SOCKET_PATH=/sockets/gateway.sock.1
@@ -44,7 +43,6 @@ services:
   rinha-gateway-2:
     build: .
     container_name: rinha-gateway-2
-
     environment:
       - GATEWAY_ID=2
       - SOCKET_PATH=/sockets/gateway.sock.2
@@ -64,7 +62,6 @@ services:
   rinha-storage:
     build: .
     container_name: rinha-storage
-
     environment:
       - STORAGE_MODE=true
       - SOCKET_PATH=/sockets/storage.sock
@@ -83,7 +80,6 @@ volumes:
 
 networks:
   backend:
-    name: rinha-net
     driver: bridge
   payment-processor:
     external: true

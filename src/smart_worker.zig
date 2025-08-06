@@ -65,14 +65,18 @@ pub const SmartWorkerSystem = struct {
     }
 
     fn masterWorkerLoop(self: *SmartWorkerSystem) void {
+        std.debug.print("Master worker started\n", .{});
         while (self.running.load(.acquire)) {
             if (self.queue.pop()) |payment| {
+                std.debug.print("Master processing payment: {s}\n", .{payment.correlation_id});
                 const start_time = std.time.nanoTimestamp();
 
                 const processor_type = self.client.sendPayment(payment) catch {
+                    std.debug.print("Payment failed\n", .{});
                     self.queue.allocator.free(payment.correlation_id);
                     continue;
                 };
+                std.debug.print("Payment processed\n", .{});
 
                 const duration_ns = std.time.nanoTimestamp() - start_time;
                 const duration_ms = @as(u32, @intCast(@divTrunc(duration_ns, 1_000_000)));
