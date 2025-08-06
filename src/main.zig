@@ -7,25 +7,40 @@ const storage = @import("storage.zig");
 const http_utils = @import("http_utils.zig");
 const HttpClient = @import("http_client.zig").HttpClient;
 const PaymentQueue = @import("payment_queue.zig").PaymentQueue;
-const PaymentWorker = @import("payment_worker.zig").PaymentWorker;
+const SmartWorkerSystem = @import("smart_worker.zig").SmartWorkerSystem;
+const SharedProcessorState = @import("shared_state.zig").SharedProcessorState;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    const storage_mode = std.process.getEnvVarOwned(allocator, "STORAGE_MODE") catch null;
+    defer if (storage_mode) |mode| allocator.free(mode);
+
+    if (storage_mode != null) {
+        return runStorageService(allocator);
+    }
+
     var store = storage.Storage.init(allocator);
     defer store.deinit();
 
-    var client = HttpClient.init(allocator);
+    const trigger_ms = 200;
+    const slave_count = 2;
+
+    var shared_state = SharedProcessorState.init();
+    var client = HttpClient.init(allocator, &shared_state, trigger_ms);
     var queue = PaymentQueue.init(allocator);
     defer queue.deinit();
 
-    var worker = PaymentWorker.init(&queue, &client, &store);
-    try worker.start();
-    defer worker.stop();
+    var worker_system = SmartWorkerSystem.init(allocator, &queue, &client, &store, &shared_state, trigger_ms, slave_count);
+    defer worker_system.deinit();
 
-    const socket_path = "/tmp/gateway.sock";
+    try worker_system.start();
+    defer worker_system.stop();
+
+    const socket_path = std.process.getEnvVarOwned(allocator, "SOCKET_PATH") catch "/tmp/gateway.sock";
+    defer if (!std.mem.eql(u8, socket_path, "/tmp/gateway.sock")) allocator.free(socket_path);
 
     if (std.fs.cwd().access(socket_path, .{})) {
         try std.fs.cwd().deleteFile(socket_path);
@@ -109,4 +124,49 @@ fn handleSummary(allocator: std.mem.Allocator, store: *storage.Storage, stream: 
 fn send404(stream: net.Stream) !void {
     const response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
     _ = try stream.writeAll(response);
+}
+
+fn runStorageService(allocator: std.mem.Allocator) !void {
+    print("Starting Storage Service...\n", .{});
+
+    var store = storage.Storage.init(allocator);
+    defer store.deinit();
+
+    const socket_path = std.process.getEnvVarOwned(allocator, "SOCKET_PATH") catch "/tmp/storage.sock";
+    defer if (!std.mem.eql(u8, socket_path, "/tmp/storage.sock")) allocator.free(socket_path);
+
+    if (std.fs.cwd().access(socket_path, .{})) {
+        try std.fs.cwd().deleteFile(socket_path);
+    } else |_| {}
+
+    const address = try net.Address.initUnix(socket_path);
+    var server = address.listen(.{
+        .reuse_address = true,
+    }) catch |err| {
+        print("Failed to bind storage to {s}: {}\n", .{ socket_path, err });
+        return;
+    };
+    defer server.deinit();
+
+    print("Storage Service listening on {s}\n", .{socket_path});
+
+    while (true) {
+        const connection = server.accept() catch |err| {
+            print("Failed to accept storage connection: {}\n", .{err});
+            continue;
+        };
+
+        handleStorageConnection(allocator, &store, connection) catch |err| {
+            print("Error handling storage connection: {}\n", .{err});
+        };
+        connection.stream.close();
+    }
+}
+
+fn handleStorageConnection(allocator: std.mem.Allocator, store: *storage.Storage, connection: net.Server.Connection) !void {
+    _ = allocator;
+    _ = store;
+    _ = connection;
+
+    print("Storage connection handled\n", .{});
 }
