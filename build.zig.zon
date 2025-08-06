@@ -1,0 +1,12 @@
+.{
+    .name = .rinha_de_backend_2025_zig,
+    .version = "0.0.1",
+    .fingerprint = 0x914c96a115dca26c,
+    .minimum_zig_version = "0.14.1",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
